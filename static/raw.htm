@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>RAW</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <link rel="stylesheet" type="text/css" href="/iotnxt_mesh.css">
+  <script src="/libs/jquery-1.11.0.min.js"></script>
+  <script src="/libs/vectors.js"></script>
+  <script src="/libs/three.min.js"></script>
+  <script src="/libs/TrackballControls.js"></script>
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="/libs/math.js"></script>
+  
+
+  
+
+ <script>
+
+    //* -------- SOCKET.IO ------------ */
+
+var latestdata_mesh = [];
+
+
+var socket = io.connect();
+  socket.on('connect', function(data) {
+  socket.emit('join', 'Hello World from client');
+});
+
+socket.on('mesh', function(data) {
+  console.log(data)
+
+  if (data.STEP) { updateStep(data.STEP); }
+  //if (data.MICROS) { updateMicros(data.MICROS); }
+  if (data.MESH) { latestdata_mesh = data.MESH; updateMesh(latestdata_mesh);}
+  if (data.CMD == "REPORT") {  
+    console.log(getMeshMicro()/1000);
+    //console.log( (getMeshMicro()/1000).toFixed(3) + "ms");
+    }
+});
+
+var anchorData = [];
+
+var calibrateScale = 2.33/3.258;
+
+socket.on('meshnodes', function(data) {
+  console.log(data);
+  
+  //$("#rawdata").prepend(JSON.stringify(data)+"<br>");
+
+  //if (data.anchorNumber)
+  //$("#rawdata_anchor"+data.anchorNumber).html( (parseFloat(data.distance)*calibrateScale).toFixed(4) +"m")
+  
+});
+
+var mesh = {}
+mesh.nodes = []
+
+for (var n = 0; n < 6; n++) {
+  mesh.nodes.push({led: 0})
+}
+
+// A $( document ).ready() block.
+$( document ).ready(function() {
+    console.log( "ready!" );
+
+    $("#control_rangetests").click( function() {
+      console.log("doing range tests:")
+      socket.emit('serial', {control:"rangetest"});
+    })
+
+
+
+    
+    $("#control_ledtest0").click( function() {ledClick(0);})
+    $("#control_ledtest1").click( function() {ledClick(1);})
+    $("#control_ledtest2").click( function() {ledClick(2);})
+    $("#control_ledtest3").click( function() {ledClick(3);})
+    $("#control_ledtest4").click( function() {ledClick(4);})
+    $("#control_ledtest5").click( function() {ledClick(5);})
+    
+    function ledClick(id) {
+      mesh.nodes[id].led = (mesh.nodes[id].led == 0 ? 1 : 0); //TOGGLE
+      control_ledtest(id, mesh.nodes[id].led);
+      if (mesh.nodes[id].led == 1) { $("#control_ledtest"+id).css("background", "#f9aa1f") } else { $(this).css("background", "#666") }
+    }
+
+    /*---------*/
+    $("#control_tx_clock").click( function() {
+      socket.emit('serial', {"CMD":"TX_CLOCK", "MICROS": "0", Q:[] });
+    })
+    /*---------*/
+   /*---------*/
+    $("#control_set").click( function() {
+      var userSetResetAmount = parseInt($("#control_setReset_amount").val());
+      if (isNaN(userSetResetAmount)) { userSetResetAmount=250;}
+
+      var userSetRangeDelayAmount = parseInt($("#control_setRangeDelay_amount").val());
+      if (isNaN(userSetRangeDelayAmount)) { userSetRangeDelayAmount=3000;}
+
+      var userSetDelayAmount = parseInt($("#control_setDelay_amount").val());
+      if (isNaN(userSetDelayAmount)) { userSetDelayAmount=3000;}
+
+      var userSetSamplesAmount = parseInt($("#control_setSamples_amount").val());
+      if (isNaN(userSetSamplesAmount)) { userSetSamplesAmount=6;}
+
+      var setcommandjson = {
+        "CMD":"SET", 
+        "RESET": userSetResetAmount, 
+        "RDELAY": userSetRangeDelayAmount,
+        "DELAY": userSetDelayAmount,
+        "SAMPLES": userSetSamplesAmount, 
+      Q:[] }
+        console.log(setcommandjson);
+      socket.emit('serial', setcommandjson);
+    })
+    /*---------*/    
+
+    $("#control_range_0_1").click(function() { control_range(0,1); })
+    $("#control_range_0_2").click(function() { control_range(0,2); })
+    $("#control_range_0_3").click(function() { control_range(0,3); })
+    $("#control_range_1_0").click(function() { control_range(1,0); })
+    $("#control_range_1_2").click(function() { control_range(1,2); })
+    $("#control_range_1_3").click(function() { control_range(1,3); })
+    $("#control_range_2_0").click(function() { control_range(2,0); })
+    $("#control_range_2_1").click(function() { control_range(2,1); })
+    $("#control_range_2_3").click(function() { control_range(2,3); })
+    $("#control_range_3_0").click(function() { control_range(3,0); })
+    $("#control_range_3_1").click(function() { control_range(3,1); })
+    $("#control_range_3_2").click(function() { control_range(3,2); }) 
+    
+    /*--------*/
+
+    $("#control_latestrange_0").click(function() {
+      control_latestrange(0);
+    })
+    $("#control_latestrange_1").click(function() {
+      control_latestrange(1);
+    })
+    $("#control_latestrange_2").click(function() {
+      control_latestrange(2);
+    })
+    $("#control_latestrange_3").click(function() {
+      control_latestrange(3);
+    })
+
+});
+
+
+///////////////// TEST START
+
+function control_ledtest(deviceID, state) {
+  console.log("doing LED test on device"+deviceID)
+  socket.emit('serial', { 
+    CMD: "LED", 
+    LED:parseInt(state), 
+    TARGETID: parseInt(deviceID), 
+    Q: [] }); //we add the Q so that the mesh will forward it on and track who's seen the message
+}
+
+function control_range(anchor, tag) {
+  console.log("doing RANGE test on device "+anchor+" and "+tag);
+  socket.emit('serial', {CMD:"RANGE", A:anchor, T:tag, M: "0", S: "10000",  Q:[]})
+  meshMicroOffset = -micros();
+  console.log(getMeshMicro());
+}
+
+function control_latestrange(deviceID) {
+  console.log("requesting LATESTRANGE from device "+deviceID);
+  socket.emit('serial', { 
+    CMD: "LATESTRANGE", 
+    TARGETID: parseInt(deviceID), 
+    Q: [] }); //we add the Q so that the mesh will forward it on and track who's seen the message
+}
+
+///////////////// TESTS END
+
+
+/*
+
+*/
+
+//GET THIS FROM MESH
+var microsPerNode = 300000;
+var num_devices = 4;
+//END
+
+var clockInSync = 0;
+var meshMicroOffset = 0;
+var meshStep = 0;
+var meshStepOffset = 0;
+
+function micros() {
+  return Math.round(window.performance.now() * 1000);
+}
+
+function getMeshMicro() {
+    return micros() + meshMicroOffset;
+}
+
+function getMeshStep() {
+    return Math.round(getMeshMicro()/(microsPerNode*num_devices));
+}
+
+function getClockMicro() { 
+    return (micros() + meshMicroOffset)%(microsPerNode*num_devices);
+} 
+
+
+
+
+function updateStep(step) { 
+  $("#step").html(step); 
+  console.log(getMeshStep());
+}
+
+function updateMicros(micros) { 
+    var inclock = parseInt(micros); 
+    var nowclock = getMeshMicro(); //local clock
+    var difference = inclock - nowclock;
+    //console.log("micros difference: "+difference)
+    meshMicroOffset += difference;  
+    clockInSync = 1;
+
+}
+
+setInterval(function() {
+    $("#step").html(getMeshStep());
+    updateMesh(latestdata_mesh);
+    $("#micros").html(getMeshMicro());
+}, 10);
+
+///////////////////////////////////////
+
+function updateMesh(mesh) {
+  
+  var meshNewHtml = "";
+  for (var m in mesh) {
+    var stepdiff = getMeshStep()-mesh[m];
+    if (stepdiff <= 2) {
+      //up to date
+      meshNewHtml += '<div class="meshNodes" style="background: #3c3;">';
+    }
+    if ((2 < stepdiff)&&( stepdiff <= num_devices)) {
+      //late
+      meshNewHtml += '<div class="meshNodes" style="background: #cc7e33;">';
+    } 
+    if (num_devices < stepdiff) {
+      //unresponsive
+      meshNewHtml += '<div class="meshNodes" style="background: #c33;">';
+    }
+    
+    meshNewHtml += mesh[m];
+    meshNewHtml += "</div>";
+  }
+
+  $("#mesh").html(meshNewHtml);
+
+}
+
+</script>
+
+  </head>
+<body>
+
+  <div class="panels">
+    <div id="control_ledtest0" class="buttons">LED 0</div>
+    <div id="control_ledtest1" class="buttons">LED 1</div>
+    <div id="control_ledtest2" class="buttons">LED 2</div>
+    <div id="control_ledtest3" class="buttons">LED 3</div>
+    <div id="control_ledtest4" class="buttons">LED 4</div>
+    <div id="control_ledtest5" class="buttons">LED 5</div>
+  </div>
+
+  <div class="panels">
+    <div id="control_tx_clock" class="buttons">TX_CLOCK</div>
+ </div>
+
+  <div class="panels">
+    <div>
+      <div style="float:left; ">
+        Reset:
+        <input id="control_setReset_amount" title="This is amount of milliseconds before a ranging event will timeout." placeholder="250" style="width: 2em; text-align:right;" >
+      </div>    
+      <div style="float:left; ">
+        Samples:
+        <input id="control_setSamples_amount" title="This is amount of ranging samples that will be collected per event." placeholder="6" style="width: 1em; text-align:right;" >
+      </div>
+    <div style="float:left; ">
+        RangeDelay:
+        <input id="control_setRangeDelay_amount" title="This is amount of microseconds between ranging nodes." placeholder="3000" style="width: 3em; text-align:right;" >
+      </div>      
+      <div style="float:left; ">
+        MeshDelay:
+        <input id="control_setDelay_amount" title="This is amount of microseconds delay between mesh signal events." placeholder="3000" style="width: 3em; text-align:right;" >
+      </div>
+      <div id="control_set" class="buttons">SET</div>
+    </div>
+    250, 1, 400, 600
+  </div>  
+
+  <div class="panels">
+    <div>
+      <div id="control_range_0_1" class="buttons">RANGE A:0 T:1</div>
+      <div id="control_range_0_2" class="buttons">RANGE A:0 T:2</div>
+      <div id="control_range_0_3" class="buttons">RANGE A:0 T:3</div>
+    </div>
+    <div>
+      <div id="control_range_1_0" class="buttons">RANGE A:1 T:0</div>
+      <div id="control_range_1_2" class="buttons">RANGE A:1 T:2</div>
+      <div id="control_range_1_3" class="buttons">RANGE A:1 T:3</div>
+    </div>
+    <div>
+      <div id="control_range_2_0" class="buttons">RANGE A:2 T:0</div>
+      <div id="control_range_2_1" class="buttons">RANGE A:2 T:1</div>
+      <div id="control_range_2_3" class="buttons">RANGE A:2 T:3</div>
+    </div>
+    <div>
+      <div id="control_range_3_0" class="buttons">RANGE A:3 T:0</div>
+      <div id="control_range_3_1" class="buttons">RANGE A:3 T:1</div>
+      <div id="control_range_3_2" class="buttons">RANGE A:3 T:2</div>
+    </div>    
+  </div>  
+
+  <div class="panels">
+    <div>
+      <div id="control_latestrange_0" class="buttons">LATEST RANGE ID 0</div>
+      <div id="control_latestrange_1" class="buttons">LATEST RANGE ID 1</div>
+      <div id="control_latestrange_2" class="buttons">LATEST RANGE ID 2</div>
+      <div id="control_latestrange_3" class="buttons">LATEST RANGE ID 3</div>
+    </div>
+  </div> 
+
+  <div class="panels">
+    <h3>STATUS</h3><br>
+
+    <div>
+      <div class="panelsSmall">STEP: <span id="step"></span></div>
+      <div class="panelsSmall">MICROS: <span id="micros"></span></div>
+    </div>
+
+    <h3>MESH NODE ACTIVITY</h3><br>
+
+    <div>
+      <div id="mesh"></div>
+    </div>
+
+  </div>
+
+
+
+</body>    
+</html>

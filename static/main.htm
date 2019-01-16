@@ -1,0 +1,2493 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <link rel="stylesheet" type="text/css" href="./iotnxt_mesh.css">
+  <script src="./libs/jquery-1.11.0.min.js"></script>
+  <script src="./libs/vectors.js"></script>
+  <script src="./libs/three.min.js"></script>
+  <script src="./libs/OBJLoader.js"></script>
+  <script src="./libs/TrackballControls.js"></script>
+  <script src="./libs/moment.min.js"></script>
+  <script src="./libs/socket.io.js"></script>
+    <script src="./libs/math.js"></script>
+
+  
+
+
+
+  <title>iot.nxt mesh</title>
+
+<link rel="icon" 
+      type="image/png" 
+      href="./iotnxt_fav.png">
+
+  </head>
+<body>
+    <div id="status">test information</div>
+    <div id="rightClickMenu" style="display:none;"> 
+    </div>
+
+
+
+
+
+
+
+
+<script>
+    var trail;
+    var trail_count = 0;
+
+//TODO
+/*
+
+    search for nearest connections and use that.
+    lock nodes to coords.
+    code in ability to move nodes in interface.
+    signalR - done.
+
+    see newCalcLocations()
+
+*/
+
+var lastMeshUpdate = 0;
+
+String.prototype.replaceAll = function(search, replacement) {
+    var target = this;
+    return target.split(search).join(replacement);
+};
+
+var mouse = {x:0,y:0}
+
+var clickableObjects = [];
+
+document.addEventListener( 'mousedown', onDocumentMouseDown, false );
+document.addEventListener( 'mouseup', onDocumentMouseUp, false );
+document.addEventListener( 'mousemove', onDocumentMouseMove, false );
+
+//BIND TO DOM
+$( document ).ready(function() {
+    console.log("iotnxt mesh loaded");
+
+    $("#control_calcA").click(function() { updateNodePositionsTetrahedron([0, 1, 2, 3]) })
+    $("#control_calcB").click(function() { })
+    $("#control_updateLocations").click(function() { iotnxt_ui_updateNodePositions(); })
+    $("#control_calcLoc").click(function() { iotnxt_ui_calcLocations(); })
+
+    $("#control_testNode").click(function() { control_testNode(); })
+    $("#control_testNodeCalc").click(function() { control_testNodeCalc(); })
+    //GENERATE ICONS
+    var iconhtml = "";
+    for (var a = 0; a < nodecount; a++) {
+        iconhtml += '<div id="timeNode'+a+'" class="nodeStatusBlock">'+a+'</div>';
+    }
+    $("#meshNodeStatusIcons").html(iconhtml);
+        
+
+    
+});
+
+// NEW POSITION ALGO //
+
+/*
+function calcPosition(deviceID, anchorID, distance) {
+    console.log("Calculating position for deviceId "+deviceID);
+    
+    var node = getNode(deviceID);
+
+
+    var neighbournode = getNode(anchorID)
+
+    //zerotemp
+
+    var diffx = node.x - neighbournode.x;
+    var diffy = node.y - neighbournode.y;
+    var diffz = node.z - neighbournode.z;
+    
+    var tempvec = new Vector({x: diffx, y: diffy, z:diffz});
+
+    tempvec = tempvec.Length(distance); //sets length to what we want.
+
+    node.x = tempvec.x + neighbournode.x;
+    node.y = tempvec.y + neighbournode.y;
+    node.z = tempvec.z + neighbournode.z;
+
+    
+    nodeTrailTest.push(node)
+
+    // DRAW LINE
+    if (trail_count == 0) { addTrailPoint(node);}
+    addTrailPoint(node);
+
+    updateNode(node);
+
+    socket.emit("mesh", mesh);
+    //redraws
+    iotnxt_ui_updateNodePositions();
+}
+*/
+
+
+
+function addTrailPoint(vec) {
+  console.log("point nr " + trail_count + ": " + vec.x + " " + vec.y + " " + vec.z);
+  positions[trail_count * 3 + 0] = vec.x;
+  positions[trail_count * 3 + 1] = vec.y;
+  positions[trail_count * 3 + 2] = vec.z;
+  trail_count++;
+  trail.geometry.setDrawRange(0, trail_count);
+  trail.geometry.attributes.position.needsUpdate = true;
+}
+
+function calcLocationTri(arrayDeviceId, target) {
+    var triangleBase = arrayDeviceId.slice(0,3);
+    var furthestNode = arrayDeviceId.slice(3,1);
+
+    var idA = triangleBase[0]
+    var idB = triangleBase[1]
+    var idC = triangleBase[2]
+    var idD = target
+
+    var nodeA = getNode(idA);
+    var nodeB = getNode(idB);
+    var nodeC = getNode(idC);
+    var nodeD = getNode(idD);
+
+    //////// LENGTHS    
+    var AB = getConnectionDistance(idA,idB);
+    var AC = getConnectionDistance(idA,idC);
+    var AD = getConnectionDistance(idA,idD);
+    var CD = getConnectionDistance(idC,idD);
+    var BD = getConnectionDistance(idB,idD);
+    var BC = getConnectionDistance(idB,idC);    
+
+    AsB_m = AB; 
+    AsC_m = AC;
+    AsD_m = AD; 
+    BsC_m = BC;
+    BsD_m = BD; 
+    CsD_m = CD;
+    var AsB_m2 = AsB_m * AsB_m; var AsC_m2 = AsC_m * AsC_m;
+    var AsD_m2 = AsD_m * AsD_m; var BsC_m2 = BsC_m * BsC_m;
+    var BsD_m2 = BsD_m * BsD_m; var CsD_m2 = CsD_m * CsD_m;
+    var qx = AsB_m;
+    var rx = (AsB_m2 + AsC_m2 - BsC_m2) / (2.0 * AsB_m);    
+    var ry = Math.sqrt (AsC_m2 - rx * rx);
+    var sx = (AsB_m2 + AsD_m2 - BsD_m2) / (2.0 * AsB_m);
+    var sy = (BsD_m2 - (sx - qx) * (sx - qx) - CsD_m2 + (sx - rx) * (sx - rx) + ry * ry) / (2 * ry);
+    var sz = Math.sqrt (AsD_m2 - sx * sx - sy * sy);
+
+    var A = new Vector({x: 0.0, y: 0.0, z: 0.0}); 
+    var B = new Vector({x: qx,  y: 0.0, z: 0.0});
+    var C = new Vector({x: rx,  y: ry,  z: 0.0}); 
+
+    var Dpos = new Vector({x: sx,  y: sy,  z: sz });    
+    var Dneg = new Vector({x: sx,  y: sy,  z: sz });    
+
+    Dneg.z *= -1; //flips the plane, we calculate later which is more likely.
+
+    //FIND ANGLE
+    //VECTOR AB
+    var vecAB = vectorFromNodes(nodeA, nodeB)
+    var vecABtemp = vectorFromNodes(A, B)
+
+    vecAB.normalize();
+    vecABtemp.normalize();
+
+    var rotateAngle = vecABtemp.angle(vecAB);
+
+    var rotateVec = new Vector(vecABtemp);
+    rotateVec.cross(vecAB);
+
+    rotateVec.normalize();
+
+    A.rotate(rotateVec, rotateAngle);
+    B.rotate(rotateVec, rotateAngle);
+    C.rotate(rotateVec, rotateAngle);
+    Dpos.rotate(rotateVec, rotateAngle);
+    Dneg.rotate(rotateVec, rotateAngle);
+
+    //VECTOR AB to Z AXIS
+    var zaxis = new Vector({z:-1})
+    var zrota  = zaxis.angle(vecAB);
+    var zrotv = new Vector(vecAB);
+    zrotv.cross(zaxis);
+    zrotv.normalize();
+
+
+
+    var vecACtemp   = vectorFromNodes(A, C)
+    var vecAC       = vectorFromNodes(nodeA, nodeC);
+    
+    vecACtemp.normalize();
+    vecAC.normalize();
+
+    vecACtemp.rotate(zrotv, zrota);
+    vecAC.rotate(zrotv, zrota);
+
+    vecACtemp.z = 0;
+    vecAC.z = 0;
+    vecACtemp.normalize();
+    vecAC.normalize();
+
+    var white = {r:255, g:255, b:255};
+    //drawLine(new Vector, vecACtemp, white, white)
+    //drawLine(new Vector, vecAC, white, white)
+
+    var finrotangle = vecAC.angle(vecACtemp);
+    //console.log(finrotangle)
+
+
+    A.rotate(vecAB, finrotangle);
+    B.rotate(vecAB, finrotangle);
+    C.rotate(vecAB, finrotangle);
+    Dpos.rotate(vecAB, finrotangle);
+    Dneg.rotate(vecAB, finrotangle);
+
+    //MOVE INTO POSITION
+    Dpos.x += getNode(idA).x
+    Dpos.y += getNode(idA).y
+    Dpos.z += getNode(idA).z
+
+    Dneg.x += getNode(idA).x
+    Dneg.y += getNode(idA).y
+    Dneg.z += getNode(idA).z
+
+    createBox(Dpos, {r:255,g:255,b:255} );
+    createBox(Dneg, {r:255,g:255,b:255} );
+    
+    //CAL DISTANCE pos/neg nodes to furthest.
+    var DposVec = new Vector(Dpos);
+    var DnegVec = new Vector(Dneg);
+
+    var fNode = getNode(furthestNode);
+    var fNodeVec = new Vector(fNode);
+
+    var distDpos = DposVec.distance(fNodeVec);
+    var distDneg = DnegVec.distance(fNodeVec);
+
+    console.log(distDpos.length())
+    console.log(distDneg.length())
+
+
+    /*
+    var newNodeD = getNode(idD);
+    newNodeD.x = D.x
+    newNodeD.y = D.y
+    newNodeD.z = D.z
+    updateNode(newNodeD);
+    */
+
+    // INVERT ROTATION
+    drawMesh();
+}
+
+// =============================================================================================== //
+
+
+function newCalcLocations(groupNodes) {
+    
+    //var groupNodes = [3, 2, 4, 6]; // A B C D // WE ASSUME 1 3 5 is already placed.
+
+    // ROTATE TRIANGLE TO 0,0,0 PLANE
+
+    var idA = groupNodes[0]
+    var idB = groupNodes[1]
+    var idC = groupNodes[2]
+    var idD = groupNodes[3]
+
+    var nodeA = getNode(idA);
+    var nodeB = getNode(idB);
+    var nodeC = getNode(idC);
+    var nodeD = getNode(idD);
+
+    var idAcol = genColor(idA, 0, nodecount);
+    var idBcol = genColor(idB, 0, nodecount);
+    var idCcol = genColor(idC, 0, nodecount);
+    var idDcol = genColor(idD, 0, nodecount);
+
+    // PERFORM CALC
+
+    //////// LENGTHS    
+    var AB = getConnectionDistance(idA,idB);
+    var AC = getConnectionDistance(idA,idC);
+    var AD = getConnectionDistance(idA,idD);
+    var CD = getConnectionDistance(idC,idD);
+    var BD = getConnectionDistance(idB,idD);
+    var BC = getConnectionDistance(idB,idC);
+
+    /*
+    console.log(AB); 
+    console.log(AC); 
+    console.log(AD); 
+    console.log(CD); 
+    console.log(BD); 
+    console.log(BC); 
+    */
+
+    //console.log("FOUND LENGTHS")
+    
+    AsB_m = AB; 
+    AsC_m = AC;
+    AsD_m = AD; 
+    BsC_m = BC;
+    BsD_m = BD; 
+    CsD_m = CD;
+    var AsB_m2 = AsB_m * AsB_m; var AsC_m2 = AsC_m * AsC_m;
+    var AsD_m2 = AsD_m * AsD_m; var BsC_m2 = BsC_m * BsC_m;
+    var BsD_m2 = BsD_m * BsD_m; var CsD_m2 = CsD_m * CsD_m;
+    var qx = AsB_m;
+    var rx = (AsB_m2 + AsC_m2 - BsC_m2) / (2.0 * AsB_m);    
+    var ry = Math.sqrt (AsC_m2 - rx * rx);
+    var sx = (AsB_m2 + AsD_m2 - BsD_m2) / (2.0 * AsB_m);
+    var sy = (BsD_m2 - (sx - qx) * (sx - qx) - CsD_m2 + (sx - rx) * (sx - rx) + ry * ry) / (2 * ry);
+    var sz = Math.sqrt (AsD_m2 - sx * sx - sy * sy);
+
+    A = new Vector({x: 0.0, y: 0.0, z: 0.0}); 
+    B = new Vector({x: qx,  y: 0.0, z: 0.0});
+    C = new Vector({x: rx,  y: ry,  z: 0.0}); 
+    D = new Vector({x: sx,  y: sy,  z: sz });
+    
+    //D.z *= -1;
+
+    //FIND ANGLE
+    //VECTOR AB
+    var vecAB = vectorFromNodes(nodeA, nodeB)
+    var vecABtemp = vectorFromNodes(A, B)
+
+    vecAB.normalize();
+    vecABtemp.normalize();
+
+    var rotateAngle = vecABtemp.angle(vecAB);
+
+    var rotateVec = new Vector(vecABtemp);
+    rotateVec.cross(vecAB);
+
+    rotateVec.normalize();
+
+    A.rotate(rotateVec, rotateAngle);
+    B.rotate(rotateVec, rotateAngle);
+    C.rotate(rotateVec, rotateAngle);
+    D.rotate(rotateVec, rotateAngle);
+
+    //VECTOR AB to Z AXIS
+    var zaxis = new Vector({z:-1})
+    var zrota  = zaxis.angle(vecAB);
+    var zrotv = new Vector(vecAB);
+    zrotv.cross(zaxis);
+    zrotv.normalize();
+
+
+
+    var vecACtemp   = vectorFromNodes(A, C)
+    var vecAC       = vectorFromNodes(nodeA, nodeC);
+    
+    vecACtemp.normalize();
+    vecAC.normalize();
+
+    vecACtemp.rotate(zrotv, zrota);
+    vecAC.rotate(zrotv, zrota);
+
+    vecACtemp.z = 0;
+    vecAC.z = 0;
+    vecACtemp.normalize();
+    vecAC.normalize();
+
+    var white = {r:255, g:255, b:255};
+    //drawLine(new Vector, vecACtemp, white, white)
+    //drawLine(new Vector, vecAC, white, white)
+
+    var finrotangle = vecAC.angle(vecACtemp);
+    //console.log(finrotangle)
+
+
+    A.rotate(vecAB, finrotangle);
+    B.rotate(vecAB, finrotangle);
+    C.rotate(vecAB, finrotangle);
+    D.rotate(vecAB, finrotangle);
+
+    
+
+
+    //console.log(A)
+    //console.log(B)
+    //console.log(C)
+    //console.log(D)
+
+
+    //MOVE INTO POSITION
+    
+
+    A.x += getNode(idA).x
+    A.y += getNode(idA).y
+    A.z += getNode(idA).z
+
+    B.x += getNode(idA).x
+    B.y += getNode(idA).y
+    B.z += getNode(idA).z
+
+    C.x += getNode(idA).x
+    C.y += getNode(idA).y
+    C.z += getNode(idA).z
+
+    D.x += getNode(idA).x
+    D.y += getNode(idA).y
+    D.z += getNode(idA).z
+
+
+    /*drawLine(A, B, idAcol, idBcol);
+    drawLine(A, C, idAcol, idCcol);
+    drawLine(A, D, idAcol, idDcol);
+    drawLine(C, D, idCcol, idDcol);
+    drawLine(B, D, idBcol, idDcol);
+    drawLine(B, C, idBcol, idCcol);*/
+    // CALCULATE IF WE SHOULD FLIP THE Z?
+
+    // NEW LOCATION FOR D
+
+    var newNodeB = getNode(idB);
+    newNodeB.x = B.x
+    newNodeB.y = B.y
+    newNodeB.z = B.z
+    updateNode(newNodeB);    
+
+    var newNodeC = getNode(idC);
+    newNodeC.x = C.x
+    newNodeC.y = C.y
+    newNodeC.z = C.z
+    updateNode(newNodeC);
+
+    var newNodeD = getNode(idD);
+    newNodeD.x = D.x
+    newNodeD.y = D.y
+    newNodeD.z = D.z
+    updateNode(newNodeD);
+
+    // INVERT ROTATION
+}
+
+function vectorFromNodes(base, to) {
+
+    var newvecbase = new Vector(base)
+    var newvecto = new Vector(to);
+
+    return newvecto.minus(newvecbase);
+}
+
+
+function control_testNode() {
+    //nodecount += 1;
+    //creates a testnode with distances for testing
+    mesh.nodes.push({deviceID:6, x:6, y:1, z:2})
+    mesh.connections.push({A:3, T: 6, distance: 5})
+    mesh.connections.push({A:2, T: 6, distance: 5})
+    mesh.connections.push({A:4, T: 6, distance: 5})
+    
+    //updateNodePositionsTetrahedron([1, 3, 5, 6])
+}
+
+function findConnections(deviceID) {
+    var connections = [];
+    for (var c in mesh.connections) {
+        if (mesh.connections[c].A == deviceID) { connections.push(mesh.connections[c])}
+        if (mesh.connections[c].T == deviceID) { connections.push(mesh.connections[c])}
+    }
+    return connections;
+}
+
+// WARNING. This creates randomlocations on all mesh nodes.
+function resetMesh() {
+    for (var a in mesh.nodes) {
+        mesh.nodes[a].x = Math.random()*5;
+        mesh.nodes[a].y = Math.random()*5;
+        mesh.nodes[a].z = Math.random()*5;
+    }
+
+    recalcMeshConnectionsDistanceFromPositions();
+
+    drawMesh();
+    updateServerMesh();
+}
+
+
+// THIS FUNCTION RECALCULATES DISTANCES BASED ON LOCATIONS
+// MOSTLY A HELPER/DEBUG FUNCTION TO TEST STUFF
+function recalcMeshConnectionsDistanceFromPositions() {
+    for (var c in mesh.connections) {
+        mesh.connections[c].distance = getDistanceFromPosition(mesh.connections[c].A, mesh.connections[c].T)
+    }
+}
+
+function getDistanceFromPosition(deviceID_A,deviceID_T) {
+    var A = getNode(deviceID_A)
+    var T = getNode(deviceID_T)
+
+    var Avec = new Vector(A);
+    var Tvec = new Vector(T);
+
+    var distance = Avec.distance(Tvec);
+
+    return distance.length();
+}
+
+function iotnxt_ui_calcLocations(optionalNodeUpdated) {
+    if (optionalNodeUpdated) {
+        // This node position has been changed, so lets recalc the rest of the network.
+        var connections = findConnections(optionalNodeUpdated)
+        console.log(connections);
+    } else {
+        //newCalcLocations([0,1,2,3])
+        //newCalcLocations([1,2,3,4])
+        //newCalcLocations([2,3,4,5])
+    }
+
+    //draw nodes
+    for (var n in mesh.nodes) {
+        drawNode(mesh.nodes[n].deviceID)
+    }
+    
+    //draw connections
+    for (var c in mesh.connections) {
+        var thisA = mesh.connections[c].A
+        var thisT = mesh.connections[c].T
+        drawConnection(thisA, thisT); //
+    }
+}
+
+
+function getNodeConnections(thisID) {
+    var foundConnections = [];
+    for (var c in mesh.connections) {
+        if (mesh.connections[c].A == thisID) {
+            foundConnections.push(mesh.connections[c])
+        }
+        if (mesh.connections[c].T == thisID) {
+            foundConnections.push(mesh.connections[c])
+        }
+    }
+    foundConnections.sort(function(a, b) { return b.timestamp - a.timestamp})
+    return foundConnections;
+}
+
+
+
+
+var iot_nodesUIgroup = new THREE.Group();
+iot_nodesUIgroup.stay = true;
+
+
+
+
+function drawNode(deviceIDtoDraw) {   
+
+    
+    var thisID = deviceIDtoDraw
+    var thisNode = getNode(deviceIDtoDraw)
+    var exists = 0;
+
+    positionLockToggleGeometry
+
+    //CHECK IF EXISTS
+    for (var m in meshui.nodes) {
+        if (meshui.nodes[m].deviceID == thisID) {
+            //UPDATE?
+            meshui.nodes[m].positionLock = thisNode.positionLock;
+            positionLockToggleGeometry(meshui.nodes[m]); //update geo of nodes
+            meshui.nodes[m].position.x = thisNode.x
+            meshui.nodes[m].position.y = thisNode.y
+            meshui.nodes[m].position.z = thisNode.z
+            exists = 1;
+        }
+    }
+
+    if (exists == 0) {
+        var nodegroup = new THREE.Group();
+        nodegroup.stay = true;
+        
+        var calccol = genColor(deviceIDtoDraw, 0, nodecount);
+        var nodecolor = rgb(calccol.r,calccol.g,calccol.b);
+
+        //TAG BOX
+        var geometry = new THREE.CubeGeometry( 1/10, 1/10, 1/10);
+        var material = new THREE.MeshBasicMaterial( { color: nodecolor , wireframe: 1 } );
+        var anchor = new THREE.Mesh( geometry, material );      
+        anchor.positionLock = thisNode.positionLock;
+        positionLockToggleGeometry(anchor)
+        anchor.deviceID = deviceIDtoDraw;
+        anchor.position.x = thisNode.x
+        anchor.position.y = thisNode.y
+        anchor.position.z = thisNode.z        
+        anchor.stay = true;
+
+        clickableObjects.push(anchor);
+        nodegroup.add(anchor)  
+        meshui.nodes.push(anchor);
+        iot_nodesUIgroup.add( anchor );
+    }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+function drawConnection(A, T) {
+        var nodeA = getNode(A);
+        var nodeT = getNode(T);
+
+        var exists = 0;
+        //CHECK IF ALREADY EXISTS
+        for (var c in meshui.connections) {
+            if (meshui.connections[c].A == A) {
+                if (meshui.connections[c].T == T) {
+                    meshui.connections[c].geometry.vertices[0].x = nodeA.x
+                    meshui.connections[c].geometry.vertices[0].y = nodeA.y
+                    meshui.connections[c].geometry.vertices[0].z = nodeA.z
+                    
+                    meshui.connections[c].geometry.vertices[1].x = nodeT.x
+                    meshui.connections[c].geometry.vertices[1].y = nodeT.y
+                    meshui.connections[c].geometry.vertices[1].z = nodeT.z
+
+                    meshui.connections[c].geometry.verticesNeedUpdate = true;
+                    
+                    exists = 1;
+                }
+            }
+        }
+
+        if (exists == 0) {
+            //ELSE CREATE
+            //getNode(thisA), getNode(thisT), Acol, Tcol )
+
+
+            var Acol = genColor(A, 0, nodecount);
+            var Tcol = genColor(T, 0, nodecount);
+
+            var geometry = new THREE.Geometry();
+            geometry.vertices.push(new THREE.Vector3(nodeA.x,nodeA.y,nodeA.z));
+            geometry.vertices.push(new THREE.Vector3(nodeT.x,nodeT.y,nodeT.z));
+            
+            geometry.colors[0] = new THREE.Color(Acol.r/255, Acol.g/255, Acol.b/255);  
+            geometry.colors[1] = new THREE.Color(Tcol.r/255, Tcol.g/255, Tcol.b/255);  
+            var material = new THREE.LineBasicMaterial( { 
+                color: 0xffffff, 
+                vertexColors: THREE.VertexColors, 
+                flatShading: true, 
+                transparent: true, 
+                opacity: 0.5  } );
+            var line = new THREE.Line( geometry, material );     
+            line.stay = true;          
+            line.A = A
+            line.T = T
+            scene.add(line);
+            meshui.connections.push(line);
+            
+            iot_nodesUIgroup.add( line );
+        }
+
+
+        
+    }
+
+
+function drawLine(point1, point2, Acol, Tcol) {
+
+        
+        
+
+        var geometry = new THREE.Geometry();
+        geometry.vertices.push(new THREE.Vector3(point1.x,point1.y,point1.z));
+        geometry.vertices.push(new THREE.Vector3(point2.x,point2.y,point2.z));
+        
+
+
+        //console.log(Acoltemp)
+        //console.log(Tcoltemp)
+
+        geometry.colors[0] = new THREE.Color(Acol.r/255, Acol.g/255, Acol.b/255);  
+        geometry.colors[1] = new THREE.Color(Tcol.r/255, Tcol.g/255, Tcol.b/255);  
+
+        //geometry.colors[0] = new THREE.Color(1,1,1);  
+        //geometry.colors[1] = new THREE.Color(1,1,1);  
+
+        var material = new THREE.LineBasicMaterial( { 
+            color: 0xffffff, 
+            vertexColors: THREE.VertexColors, 
+            flatShading: true, 
+            transparent: true, 
+            opacity: 0.5  } );
+        var line = new THREE.Line( geometry, material );     
+        line.stay = true;          
+        line.geometry.verticesNeedUpdate = true;
+        scene.add(line);
+    }
+
+
+    //* -------- CONFIG ------------ */
+
+/* record max time of response per ranging connection, then use that as delay for faster queries. */
+
+var realPositions = []
+realPositions.push({x: -2.8, y: -13, z: 0.8})
+realPositions.push({x: -4.7, y: -11, z: 2.1})
+realPositions.push({x: -4.7, y: -15, z: 2.1})
+
+
+
+/* == SOCKET TO MESH ========================================================= */
+
+var socket = io.connect();
+
+socket.on('connect', function(data) {
+    console.log("connected socket")
+});
+
+socket.on("fullmesh", function(data) {
+    /* server sends this on connect */
+    console.log(data);
+    mesh = data;
+    drawMesh();
+})
+
+setInterval(function() {
+    var difftime = Date.now() - lastrange;
+    var prettytime = difftime/1000
+    prettytime = Math.floor(prettytime);
+    $("#timesince").html(prettytime +" seconds since last update");
+
+
+    
+    
+    for (var m in mesh.nodes) {
+        var nodetimediff = Date.now() - mesh.nodes[m].lastSeen
+
+            
+
+            
+
+            
+            
+            var age = 1 - nodetimediff/1000;
+
+            if (age < 0) { age = 0;}
+            if (age > 1) { age = 1;}
+
+            var calccol = genColor(m, 0, nodecount);     
+
+            $("#timeNode"+mesh.nodes[m].deviceID).css("border-color", rgb(calccol.r,calccol.g,calccol.b));
+
+            var agecol = blend(calccol, {r:0, g:0, b:0}, age)
+            //var satcol = sat(calccol, age);
+            var nodecolor = rgb(agecol.r,agecol.g,agecol.b);
+            $("#timeNode"+mesh.nodes[m].deviceID).css("background", nodecolor);
+            //$("#timeNode"+mesh.nodes[m].deviceID).css("opacity", age);
+        /*
+        if (nodetimediff > 5000) {
+            $("#timeNode"+mesh.nodes[m].deviceID).css("background", "#f00");
+        }
+        if (nodetimediff < 5000) {
+            $("#timeNode"+mesh.nodes[m].deviceID).css("background", "#ff0");
+        }
+        if (nodetimediff < 2000) {
+            $("#timeNode"+mesh.nodes[m].deviceID).css("background", "#0f0");
+        }*/
+        
+    }
+    
+
+
+}, 10);
+
+function blend(colA, colB, amount) {
+    var newcol = {}
+    newcol.r = colA.r * amount   +   colB.r * (1-amount)
+    newcol.g = colA.g * amount   +   colB.g * (1-amount)
+    newcol.b = colA.b * amount   +   colB.b * (1-amount)
+    return newcol
+}
+
+function sat(col, sat) {
+    var gray = col.r * 0.3086 + col.g * 0.6094 + col.b * 0.0820;
+
+    col.r = Math.round(col.r * sat + gray * (1-sat));
+    col.g = Math.round(col.g * sat + gray * (1-sat));
+    col.b = Math.round(col.b * sat + gray * (1-sat));
+
+    return col
+}
+
+
+socket.on('meshraw', function(data) {
+    //console.log(data);
+    //activity();
+});
+
+var lastReport = {A:0, T: 0};
+
+
+var idlecount = 0;
+var lastrange = Date.now();
+
+socket.on('mesh', function (data) {
+    if (Date.now() - lastMeshUpdate < 400 ) {
+        // probably us, ignore.
+    } else {
+        console.log(data);
+        mesh = data;
+        drawMesh();
+    }
+    
+});
+
+socket.on('report', function(data) {
+    console.log("new range report:"+data.A+" "+data.T+" dist: "+data.D)
+    //console.log(data);
+    /*
+    if (getNode(data.A).positionLock == false) {
+        //console.log("must calc position")
+        calcPosition(data.A, data.T, data.D);
+    }
+
+    if (getNode(data.T).positionLock == false) {
+        //console.log("must calc position")
+        calcPosition(data.T, data.A, data.D);
+    }
+    */
+    
+    //console.log("========")
+})
+
+socket.on('nodechanged', function(data) {
+    var node = data
+    console.log('nodechanged:')
+    console.log(node);
+    nodeTrailTest.push(node);
+    if (trail_count == 0) { addTrailPoint(node);}
+    addTrailPoint(node);
+    updateNode(node);
+    iotnxt_ui_updateNodePositions();    
+});
+
+function drawMesh() {
+    //draw nodes
+    for (var n in mesh.nodes) {
+        drawNode(mesh.nodes[n].deviceID)
+    }
+    
+    //draw connections
+    for (var c in mesh.connections) {
+        var thisA = mesh.connections[c].A
+        var thisT = mesh.connections[c].T
+        drawConnection(thisA, thisT); //
+    }
+}
+
+/* =========================================================================== */
+
+//preset nodecount
+var nodecount = 6;          // 0, 1, 2, 3, 4
+
+
+
+var mesh = {}               //all of the mesh data
+mesh.active = false;        //allow auto activity on/off. off by default.
+mesh.nodes = [];            //node data
+mesh.connections = [];      //connection data
+mesh.busy = false;
+
+// UI
+var meshui = {}
+meshui.nodes = []   //holds the geometry references for the 3d ui
+meshui.connections = [] //holds the geometry for connections
+meshui.tetras = []
+
+//UPDATING
+
+function recalcPossibleConnections() {
+    /*
+    mesh.possibleconnections = [];
+
+    for (var a = 0; a < nodecount; a++) {
+        for (var t = 1; t < nodecount; t++) {
+            if (a != t) {
+                if (a < t) {
+                    if (getNode(t).positionLock == false) {
+                        mesh.possibleconnections.push({A:a, T:t});
+                    }
+
+                }            
+            }
+        }
+    }
+
+    console.log(mesh.possibleconnections)
+
+    for (var n in mesh.possibleconnections) {
+        console.log(mesh.possibleconnections[n])
+    }
+    */
+}
+
+recalcPossibleConnections();
+
+       
+
+var lastnode = 0;
+var lastlight = 1;
+
+
+var colors = {}
+colors.active = "#0f0"
+colors.inactive = "rgb(50,50,50)"
+
+
+
+/////////////////////////////////////////////////////////////////////////////////////
+
+
+
+function control_mesh_auto_toggle() { 
+    mesh.active = (mesh.active == 0 ? 1 : 0); //TOGGLE
+    if (mesh.active) {
+        $("#control_mesh_auto_toggle").css("background", colors.active)
+        $("#control_mesh_auto_toggle").html("MESH ON");
+    } else {
+        $("#control_mesh_auto_toggle").css("background", colors.inactive)
+        $("#control_mesh_auto_toggle").html("MESH OFF");
+    }
+}   
+
+
+
+
+
+/////////////////////////////////////////////////////////////////////////////////////
+var alreadyran = 0;
+var timeoffset = 400;
+
+/* RANGE */
+function activity() {
+    if (mesh.active == true) {
+        if (alreadyran == 0) {        
+            
+            alreadyran = 1;
+        }
+    }
+    
+}
+
+/*setInterval(function() {
+                meshRanging(); 
+                mesh.busy = false;
+            }, 60);*/
+
+function meshRanging() {
+    if (mesh.active == true) {
+        //console.log("mesh auto ranging...")
+        autoRangeNext()
+    }
+        /*
+        setTimeout(function() { control_range(0,1);  }, timeoffset*1);
+
+        setTimeout(function() { control_range(0,2);  }, timeoffset*2);
+
+        setTimeout(function() { control_range(0,3);  }, timeoffset*3);
+        
+        ////////
+
+        setTimeout(function() { control_range(1,2);  }, timeoffset*4);
+
+
+        setTimeout(function() { control_range(1,3);  }, timeoffset*6);
+
+        ///////
+
+        setTimeout(function() { control_range(2,3);  }, timeoffset*8);
+        */
+
+}
+
+/////////////////////////////////////////////////////////////////////////////////////
+
+
+// HANDLE NODE SERIAL COMMANDS
+
+//GET THIS FROM MESH
+var microsPerNode = 300000;
+var num_devices = 4;
+//END
+
+var clockInSync = 0;
+var meshMicroOffset = 0;
+var meshStep = 0;
+var meshStepOffset = 0;
+
+
+
+function micros() {
+  return Math.round(window.performance.now() * 1000);
+}
+
+function getMeshMicro() {
+    return micros() + meshMicroOffset;
+}
+
+function getMeshStep() {
+    return Math.round(getMeshMicro()/(microsPerNode*num_devices));
+}
+
+function getClockMicro() { 
+    return (micros() + meshMicroOffset)%(microsPerNode*num_devices);
+} 
+
+function control_ledtest(deviceID, state) {
+  console.log("doing LED test on device"+deviceID)
+  socket.emit('serial', { 
+    CMD: "LED", 
+    LED:parseInt(state), 
+    TARGETID: parseInt(deviceID), 
+    Q: [] }); //we add the Q so that the mesh will forward it on and track who's seen the message
+}
+
+/*function control_range(anchor, tag) {
+  console.log("doing RANGE test on device "+anchor+" and "+tag);
+  socket.emit('serial', {CMD:"RANGE", A:anchor, T:tag, M: "0", S: "5000",  Q:[]})
+  meshMicroOffset = -micros();
+  console.log(getMeshMicro());
+}*/
+
+function control_range(anchor, tag) {
+  console.log("doing RANGE test on device "+anchor+" and "+tag);
+  if (mesh.busy == false) {
+    socket.emit('serial', {CMD:"RANGE", A:anchor, T:tag, M: "0", S: "5000",  Q:[]})
+    meshMicroOffset = -micros();
+  }  
+  
+}
+
+
+
+function control_latestrange(deviceID) {
+  console.log("requesting LATESTRANGE from device "+deviceID);
+  socket.emit('serial', { 
+    CMD: "LATESTRANGE", 
+    TARGETID: parseInt(deviceID), 
+    Q: [] }); //we add the Q so that the mesh will forward it on and track who's seen the message
+}
+
+
+var nextAutoRangeConnection = 0;
+var timeSinceLastAuto = Date.now();
+
+var speed = 1000;
+
+function autoRangeNext() {
+    if (mesh.active) {
+        if (Date.now() - timeSinceLastAuto > speed) {
+            control_range(
+                mesh.possibleconnections[nextAutoRangeConnection].A,
+                mesh.possibleconnections[nextAutoRangeConnection].T);
+
+            nextAutoRangeConnection++;
+            if (nextAutoRangeConnection == mesh.possibleconnections.length) { nextAutoRangeConnection = 0}
+            timeSinceLastAuto = Date.now();
+        }
+    } else {
+        timeSinceLastAuto = Date.now();
+    }
+
+}
+
+function handleNewRangeReport(inData) {
+    //console.log( (getMeshMicro()/1000).toFixed(3) + "ms");
+
+    
+    var timeTaken_ms = getMeshMicro()/1000;
+   
+
+    //range data in
+    //{ CMD: 'REPORT', A: 0, T: 1, D: '0.0905', Q: [ 1, 0 ] }
+    handleNodeID(inData.A);
+    handleNodeID(inData.T);    
+    handleNodeConnection(inData.A, inData.T, parseFloat(inData.D));
+
+    var tempnodeA = getNode(inData.A)
+    tempnodeA.lastSeen = Date.now();
+    updateNode(tempnodeA);
+
+    var tempnodeT = getNode(inData.T)
+    tempnodeT.lastSeen = Date.now();
+    updateNode(tempnodeT);
+}
+
+//////////////////////////////
+
+/*
+setInterval(function() {
+    if (mesh.auto == true) {
+        console.log("Doing auto update..")
+        autoRangeNext();
+
+        for (var n in mesh.nodes) {
+            console.log(mesh.nodes[n].lastSeen)
+        }
+    }    
+}, 1000);
+*/
+
+function onlyTrack(id) {
+    mesh.possibleconnections = [];
+
+    for (var a = 0; a < nodecount; a++) {
+        for (var t = 1; t < nodecount; t++) {
+            if (a != t) {
+                if (a < t) {
+                    if (id == t) {
+                        mesh.possibleconnections.push({A:a, T:t});
+                    }
+                    
+                }            
+            }
+        }
+    }
+}
+
+//////////////////////////////////////////////////////////////////////////
+// NEW NODES
+function handleNodeID(inID) {    
+    var found = 0;
+    for (var n in mesh.nodes) {
+        if (mesh.nodes[n].deviceID == inID) {
+            //update
+            found = 1;
+            //todo: record time last seen.
+        }        
+    }
+
+    if (found == 0) {
+        console.log("Node connected "+inID);
+        var newnode = { deviceID: inID, x: 0, y:0, z: 0, lastSeen: 0 }
+
+        /*
+        if (inID == 1) { newnode.x = 0.001;}
+        if (inID == 2) { newnode.x = 0.001;newnode.y = 0.001;}
+        if (inID >= 3) { 
+            newnode.x = Math.random()*0.001;
+            newnode.y = Math.random()*0.001;
+            newnode.z = Math.random()*0.001;}
+            */
+        
+        //if (inID != 0) { newnode.x = Math.random()*2-1; newnode.y = Math.random()*2-1; }
+
+        mesh.nodes.push(newnode);
+    }
+
+    if (found == 1 ) {
+        //console.log("updating node lastseen")
+        var thisnode = getNode(inID)
+        thisnode.lastSeen = Date.now();
+        updateNode(thisnode);
+    }
+
+}
+
+//////////////////////////////////////////////////////////////////////////
+
+function handleNodeConnection(nodeIdA, nodeIdT, measuredDistance) {
+    var found = 0;
+    for (var n in mesh.connections) {
+        if ((mesh.connections[n].A == nodeIdA)&&(mesh.connections[n].T == nodeIdT)) 
+        {
+            found = 1;
+            //update
+            mesh.connections[n].distance = measuredDistance;
+        }
+    }
+    
+    if (found == 0) {
+        console.log("New connection found between "+nodeIdA+" and "+nodeIdT+" with a distance of "+ measuredDistance);
+        var newconnection = {A: nodeIdA, T: nodeIdT, distance: measuredDistance};
+        mesh.connections.push(newconnection);
+    }
+
+    
+
+    //updateNodePosition(nodeIdA, nodeIdT, measuredDistance);
+    if (mesh.connections.length >= 6) {
+
+        //console.log("TRACKING ID 3");
+        //onlyTrack(3);
+        //speed = 200;
+        //console.log("### CALCULATE TETRAHEDRON")
+
+        var conns = []
+        for (var n = 0; n < nodecount; n++) {
+            conns.push(n);
+        }
+        
+
+        //console.log("TETRA:")
+        var combinations = k_combinations(conns, 4);
+        //console.log(combinations);
+        
+        for (var c in combinations) {
+            //console.log("TETRA "+c)
+            //var connections = k_combinations(combinations[c], 2);
+            //updateNodePositionsTetrahedron(combinations[c]);
+        }
+        
+        
+        
+    }
+
+
+}
+
+//////////////////////////////////////////////////////////////////////////
+
+
+function getNode(inID) {
+    var found = 0;
+    for (var n in mesh.nodes) {
+        if (mesh.nodes[n].deviceID == inID) {
+            //update
+            found = 1;
+            return mesh.nodes[n];
+            //todo: record time last seen.
+        }        
+    }
+    if (found == 0) { return undefined;}
+}
+
+function getConnection(A, T) {
+    var found = 0;
+    for (var n in mesh.connections) {
+        if (mesh.connections[n].A == A) {
+            if (mesh.connections[n].T == T) {
+                console.log("found connection returning");
+                found = 1;
+                return mesh.connections[n];
+            }
+        }
+    }
+    if (found == 0) { return 0 }
+}
+
+function updateNode(newNodeData, force) {
+    var found = 0;
+
+    for (var n in mesh.nodes) {
+        if (mesh.nodes[n].deviceID == newNodeData.deviceID) {
+            if (mesh.nodes[n].positionLock == true) {
+                if (force == true) {
+                    mesh.nodes[n].x = newNodeData.x;
+                    mesh.nodes[n].y = newNodeData.y;
+                    mesh.nodes[n].z = newNodeData.z;
+                } else {
+                    console.log("node has positionLock set to true, and force was not enabled on updateNode(node,force). not updating node.")
+                }
+            } else {
+                mesh.nodes[n].x = newNodeData.x;
+                mesh.nodes[n].y = newNodeData.y;
+                mesh.nodes[n].z = newNodeData.z;
+            }
+            
+
+        }        
+    }
+    //if (found == 0) { return undefined;}
+    drawNode(newNodeData.deviceID);
+}
+
+///////////////////////////////////////////////////////////
+function cart (a, b, c) { this.x = a; this.y = b; this.z = c; this.m = Math.sqrt (a * a + b * b + c * c); }
+
+function updateNodePositionsTetrahedron(inNodes) {
+    //SORT
+    // http://tamivox.org/redbear/tetra_calc/index.html
+    var tempNodes = []
+    
+    
+    var AB = getConnectionDistance(inNodes[0],inNodes[1]);
+    var AC = getConnectionDistance(inNodes[0],inNodes[2]);
+    var AD = getConnectionDistance(inNodes[0],inNodes[3]);
+    var CD = getConnectionDistance(inNodes[2],inNodes[3]);
+    var BD = getConnectionDistance(inNodes[1],inNodes[3]);
+    var BC = getConnectionDistance(inNodes[1],inNodes[2]);
+
+    //console.log("FOUND LENGTHS")
+    
+    AsB_m = AB; 
+    AsC_m = AC;
+    AsD_m = AD; 
+    BsC_m = BC;
+    BsD_m = BD; 
+    CsD_m = CD;
+    var AsB_m2 = AsB_m * AsB_m; var AsC_m2 = AsC_m * AsC_m;
+    var AsD_m2 = AsD_m * AsD_m; var BsC_m2 = BsC_m * BsC_m;
+    var BsD_m2 = BsD_m * BsD_m; var CsD_m2 = CsD_m * CsD_m;
+    var qx = AsB_m;
+    var rx = (AsB_m2 + AsC_m2 - BsC_m2) / (2.0 * AsB_m);    
+    var ry = Math.sqrt (AsC_m2 - rx * rx);
+    var sx = (AsB_m2 + AsD_m2 - BsD_m2) / (2.0 * AsB_m);
+    var sy = (BsD_m2 - (sx - qx) * (sx - qx) - CsD_m2 + (sx - rx) * (sx - rx) + ry * ry) / (2 * ry);
+    var sz = Math.sqrt (AsD_m2 - sx * sx - sy * sy);
+
+    A = new cart (0.0, 0.0, 0.0); B = new cart (qx,  0.0, 0.0);
+    C = new cart (rx,  ry,  0.0); D = new cart (sx,  sy,  sz );
+
+    /*
+    createLine(A, B);
+    createLine(A, C);
+    createLine(A, D);
+    createLine(B, C);
+    createLine(B, D);
+    createLine(C, D);
+    */
+
+    A.deviceID = inNodes[0]
+    updateNode(A)
+
+    B.deviceID = inNodes[1]
+    updateNode(B)
+
+    C.deviceID = inNodes[2]
+    updateNode(C)
+
+    D.deviceID = inNodes[3]
+    updateNode(D)
+    //CALC
+
+
+}
+
+
+
+function build_tetra_one() {
+    console.log("building tetra 1")
+    createLine(getNode(0), getNode(1));
+    createLine(getNode(0), getNode(2));
+    createLine(getNode(0), getNode(3));
+    createLine(getNode(1), getNode(2));
+    createLine(getNode(1), getNode(3));
+    createLine(getNode(2), getNode(3));
+}
+
+
+
+
+
+
+function getConnectionDistance(start, end) {
+    for (var n in mesh.connections) {
+        if ((mesh.connections[n].A == start) && (mesh.connections[n].T == end) ) {
+            return mesh.connections[n].distance;
+        }
+        if ((mesh.connections[n].T == start) && (mesh.connections[n].A == end) ) {
+            return mesh.connections[n].distance;
+        }        
+    }
+}
+
+
+function updateNodePosition(nodeIdA, nodeIdT, measuredDistance) {
+    //OLD
+    console.log("updating " + nodeIdA + " " + nodeIdT + " " + measuredDistance)
+    
+    var newNodeT = getNode(nodeIdT); //get old
+
+    var diffx = newNodeT.x - getNode(nodeIdA).x;
+    var diffy = newNodeT.y - getNode(nodeIdA).y;
+    var diffz = newNodeT.z - getNode(nodeIdA).z;
+    
+    var tempvec = new Vector({x: diffx, y: diffy, z:diffz});
+    tempvec = tempvec.Length(measuredDistance); //sets length to what we want.
+
+    newNodeT.x = tempvec.x + getNode(nodeIdA).x;
+    newNodeT.y = tempvec.y + getNode(nodeIdA).y;
+    newNodeT.z = tempvec.z + getNode(nodeIdA).z;
+
+    updateNode(newNodeT);
+
+    iotnxt_ui_updateNodePositions(); //update UI
+}
+
+function iotnxt_ui_updateNodePositions() {
+    //console.log("ui update")
+    
+    /*for (var n in meshui.nodes) {
+        meshui.nodes[mesh.nodes[n].deviceID].position.x = mesh.nodes[n].x
+        meshui.nodes[mesh.nodes[n].deviceID].position.y = mesh.nodes[n].y
+        meshui.nodes[mesh.nodes[n].deviceID].position.z = mesh.nodes[n].z
+    }*/
+
+    /* 
+        iot_nodesUIgroup.position.x = realPositions[0].x;
+        iot_nodesUIgroup.position.y = realPositions[0].y;
+        iot_nodesUIgroup.position.z = realPositions[0].z;
+    */
+
+
+
+}
+
+
+
+    ///////////////////////////////////////////////////////////
+
+
+
+//////////////////////////////////////////////////////////////////////////
+
+
+
+
+var nodeIsAlive = false;
+
+
+
+var nodeTrailTest = []
+
+
+//* -------- UPDATING ------------ */
+
+
+
+
+
+    ///////////////////////////////////////////////////////////
+
+    var renderer = new THREE.WebGLRenderer({antialias: true,alpha: true})
+    renderer.setSize( window.innerWidth, window.innerHeight );
+    //renderer.sortObjects = false;
+
+    var scene = new THREE.Scene()
+    scene.add(iot_nodesUIgroup);
+
+    // DRAG PLANE
+    // https://www.script-tutorials.com/webgl-with-three-js-lesson-10/
+    // Plane, that helps to determinate an intersection position
+    var plane = new THREE.Mesh(
+        new THREE.PlaneBufferGeometry(500, 500, 8, 8), 
+        new THREE.MeshBasicMaterial({ color: rgb(255,255,0), visible: false })
+    );
+    plane.stay = true;
+    scene.add(this.plane);
+
+    ///// TRAIL
+
+    // geometry
+    var geometry = new THREE.BufferGeometry();
+    var MAX_POINTS = 500;
+    positions = new Float32Array(MAX_POINTS * 3);
+    geometry.addAttribute('position', new THREE.BufferAttribute(positions, 3));
+
+    // material
+    var material = new THREE.LineBasicMaterial({
+        color: 0xff0000,
+        linewidth: 2
+    });
+
+    // line
+    trail = new THREE.Line(geometry, material);
+    trail.stay = true;
+    scene.add(trail);
+
+    
+    //PLACEMENT GIMBAL =======================
+  
+
+    ////// =============== end gimbals
+
+    //CAMERA
+
+    var camera = new THREE.PerspectiveCamera( 50, window.innerWidth / window.innerHeight, 0.1, 1000 )
+    camera.position.x = -31.23140090028328
+    camera.position.y = -53.481898191149924
+    camera.position.z = 31.97825170913526
+
+    
+    scene.add(camera)
+
+        var controls = new THREE.TrackballControls( camera );
+        
+        controls.target.set( 0.5063933332580325, -18.379339808578838, -0.8578668550843589 );
+
+
+
+        controls.rotateSpeed = 1;
+        controls.zoomSpeed = 1;
+        controls.panSpeed = 1;
+
+        controls.noZoom = false;
+        controls.noPan = false;
+
+        controls.staticMoving = false;
+        controls.dynamicDampingFactor = 1;
+
+        controls.keys = [ 65, 83, 68 ];
+        controls.cylindricalRotation = true;
+        //controls.addEventListener( 'change', render );
+
+        controls.object.up.x = 0.6216902503304941
+        controls.object.up.y = 0.7288287793420092
+        controls.object.up.z = 0.2341963285874342
+
+       
+
+    document.body.appendChild( renderer.domElement );           //adds the render output to the document
+
+
+/* ENVIRONMENT OBJ */
+//var buildingMaterial = new THREE.MeshBasicMaterial( { color: rgb(255,255,255),side: THREE.DoubleSide, transparent: true, opacity: 0.1 } );
+
+
+
+//var geo = new THREE.EdgesGeometry( geometrysphere ); // or WireframeGeometry( geometry )
+var buildingMaterial = new THREE.LineBasicMaterial( { color: "#0xffffff", flatShading: true  } );
+//var sphere = new THREE.LineSegments( geo, mat );
+
+
+    /*
+            var material = new THREE.LineBasicMaterial( { 
+                color: 0xffffff, 
+                vertexColors: THREE.VertexColors, 
+                flatShading: true, 
+                transparent: true, 
+                opacity: 0.5  } );
+            var line = new THREE.Line( geometry, material );   
+            */
+
+            /*var geo = new THREE.WireframeGeometry( geometrysphere ); // or WireframeGeometry( geometry )                
+            //var geo = new THREE.EdgesGeometry( geometrysphere ); // or WireframeGeometry( geometry )
+            var mat = new THREE.LineBasicMaterial( { color: nodecolor, linewidth: 2 } );
+            var sphere = new THREE.LineSegments( geo, mat );*/
+
+
+
+var loader      = new THREE.OBJLoader();
+var building    = new THREE.Group();
+building.stay   = true;
+
+
+
+		// load a resource
+		loader.load(
+			// resource URL
+			'3d/office_2_1_low.obj',
+			// Function when resource is loaded
+			function ( object ) {
+                object.stay = true;
+
+                object.traverse( function ( child ) {
+                    if ( child instanceof THREE.Mesh ) {
+                        //child.material = buildingMaterial;
+                                        
+                        var wireframe = new THREE.WireframeGeometry( child.geometry );
+                        var line = new THREE.LineSegments( wireframe );
+                        line.material.color.r = 1
+                        line.material.color.g = 1
+                        line.material.color.b = 1
+                        line.material.depthTest = false;
+                        line.material.opacity = 0.05;
+                        line.material.transparent = true;
+                        line.stay = true;
+                        building.add( line );
+                        
+                    }
+                } );
+
+                
+                building.rotation.x = Math.PI /2;
+                scene.add( building );
+			}
+		);
+
+        
+
+////////////// SETUP POSITIONS // NODE 0
+
+/*
+    var setup_geometry = new THREE.CubeGeometry( 1, 1, 1);
+    var setup_material = new THREE.MeshBasicMaterial( { color: rgb(255,55,55), wireframe: 1 } );
+    var setup_tag_object = new THREE.Mesh( setup_geometry, setup_material );      
+    setup_tag_object.position.x = realPositions[0].x
+    setup_tag_object.position.y = realPositions[0].y
+    setup_tag_object.position.z = realPositions[0].z
+
+
+
+    setup_tag_object.scale.x = 0.1
+    setup_tag_object.scale.y = 0.1
+    setup_tag_object.scale.z = 0.1
+
+    setup_tag_object.stay = true;
+    scene.add(setup_tag_object)        
+
+
+////////////// SETUP POSITIONS // NODE 1
+
+    var setup_geometry = new THREE.CubeGeometry( 1, 1, 1);
+    var setup_material = new THREE.MeshBasicMaterial( { color: rgb(255,255,55), wireframe: 1 } );
+    var setup_tag_object_1 = new THREE.Mesh( setup_geometry, setup_material );      
+    setup_tag_object_1.position.x = realPositions[1].x
+    setup_tag_object_1.position.y = realPositions[1].y
+    setup_tag_object_1.position.z = realPositions[1].z
+
+
+    setup_tag_object_1.scale.x = 0.1
+    setup_tag_object_1.scale.y = 0.1
+    setup_tag_object_1.scale.z = 0.1
+
+    setup_tag_object_1.stay = true;
+    scene.add(setup_tag_object_1)     
+
+////////////// SETUP POSITIONS // NODE 1
+
+    var setup_geometry = new THREE.CubeGeometry( 1, 1, 1);
+    var setup_material = new THREE.MeshBasicMaterial( { color: rgb(55,255,255), wireframe: 1 } );
+    var setup_tag_object_2 = new THREE.Mesh( setup_geometry, setup_material );      
+    setup_tag_object_2.position.x = realPositions[2].x
+    setup_tag_object_2.position.y = realPositions[2].y
+    setup_tag_object_2.position.z = realPositions[2].z
+
+
+    setup_tag_object_2.scale.x = 0.1
+    setup_tag_object_2.scale.y = 0.1
+    setup_tag_object_2.scale.z = 0.1
+
+    setup_tag_object_2.stay = true;
+    scene.add(setup_tag_object_2)    
+*/
+
+
+/* 
+TWO POSSIBLE LOCATIONS FOR A SINGLE TAG WHEN WE ONLY HAVE 3 ANCHORS */
+
+    /*
+    //DECAWAVE TAG
+    var geometry = new THREE.CubeGeometry( 1/10, 1/10, 1/10);
+    var material = new THREE.MeshBasicMaterial( { color: rgb(55,55,55), wireframe: 1 } );
+    var tag_object = new THREE.Mesh( geometry, material );      
+    tag_object.position.x = tag.x
+    tag_object.position.y = tag.y
+    tag_object.position.z = tag.z
+    tag_object.stay = true;
+    scene.add(tag_object)
+
+  //DECAWAVE TAG
+    var geometry = new THREE.CubeGeometry( 1/10, 1/10, 1/10);
+    var material = new THREE.MeshBasicMaterial( { color: rgb(255,255,255), wireframe: 1 } );
+    var tag_objectB = new THREE.Mesh( geometry, material );      
+    tag_objectB.position.x = tag.x
+    tag_objectB.position.y = tag.y
+    tag_objectB.position.z = tag.z
+    tag_objectB.stay = true;
+    scene.add(tag_objectB)
+    
+*/
+
+
+            
+
+    createGrid(scene);
+    ////////////////////////////////////////////////////////////////////////
+    animate();     
+
+    function animate() {
+          controls.update();
+          //DECAWAVE UPDATE
+          //decawaveTag.position.x = decawave.distance
+
+       
+
+        
+        requestAnimationFrame( animate );         
+        renderer.render( scene, camera );
+        //clear
+        var obj, i;
+        for ( i = scene.children.length - 1; i > 0 ; i -- ) {
+            obj = scene.children[ i ];
+            if ( obj.stay == 1) {
+                
+            } else {
+                scene.remove(obj);
+            }
+        }
+       //UPDATE
+       
+
+
+    }
+
+
+    /*
+        HELPER FUNCTIONS
+    */
+
+    function rgb(red,green,blue) {
+        var r = Math.round( red  )
+        var g = Math.round( green  )
+        var b = Math.round( blue  )
+        return "rgb("+r+","+g+","+b+")"
+    }
+
+
+function createBox(v, col) {
+    
+    var nodecolor = rgb(255,255,255);
+
+    if (col === undefined) {
+        // col was not passed
+        nodecolor = rgb(col.r,col.g,col.b);
+    }
+    
+    var geometry = new THREE.CubeGeometry( 1/10, 1/10, 1/10);
+    var material = new THREE.MeshBasicMaterial( { color: nodecolor , wireframe: 1 } );
+    var box = new THREE.Mesh( geometry, material );  
+   
+    box.position.x = v.x
+    box.position.y = v.y
+    box.position.z = v.z        
+    box.stay = true;
+    scene.add(box);
+    return box;
+}    
+
+function createLine(v1, v2) {
+        /* generates agrid for threejs scene */
+
+        //X AXIS
+        var geometry = new THREE.Geometry();
+        geometry.vertices.push(new THREE.Vector3(v1.x,v1.y,v1.z));
+        geometry.vertices.push(new THREE.Vector3(v2.x,v2.y,v2.z));
+        var material = new THREE.MeshBasicMaterial( { color: rgb(255,255,255), wireframe: 1 } );
+        var line = new THREE.Line( geometry, material );     
+        line.stay = true; 
+        scene.add(line);
+}
+
+
+    function createGrid() {
+        /* generates agrid for threejs scene */
+
+        //X AXIS
+        var geometry = new THREE.Geometry();
+        geometry.vertices.push(new THREE.Vector3(0,0,0));
+        geometry.vertices.push(new THREE.Vector3(100,0,0));
+        var material = new THREE.MeshBasicMaterial( { color: rgb(226,33,40), wireframe: 1, opacity: 0.5, transparent: true  } );
+        var line = new THREE.Line( geometry, material );     
+        line.stay = true; 
+        scene.add(line);
+
+        //Y AXIS
+        var geometry = new THREE.Geometry();
+        geometry.vertices.push(new THREE.Vector3(0,0,0));
+        geometry.vertices.push(new THREE.Vector3(0,100,0));
+        var material = new THREE.MeshBasicMaterial( { color: rgb(100,255,100), wireframe: 1, opacity: 0.5, transparent: true } );
+        var line = new THREE.Line( geometry, material );   
+        line.stay = true;    
+        scene.add(line);
+
+        //Z AXIS
+        var geometry = new THREE.Geometry();
+        geometry.vertices.push(new THREE.Vector3(0,0,0));
+        geometry.vertices.push(new THREE.Vector3(0,0,100));
+        var material = new THREE.MeshBasicMaterial( { color: rgb(100,100,255), wireframe: 1, opacity: 0.5, transparent: true } );
+        var line = new THREE.Line( geometry, material );      
+        line.stay = true; 
+        scene.add(line);
+
+        //GRID
+        for (var x = -100; x < 100; x++) {
+            //X AXIS
+            var geometry = new THREE.Geometry();
+            geometry.vertices.push(new THREE.Vector3(x-0.001,-100,-0.01));
+            geometry.vertices.push(new THREE.Vector3(x-0.001,100,-0.01));
+            var material = new THREE.MeshBasicMaterial( { color: rgb(50,50,50), wireframe: 1, opacity: 0.5, transparent: true } );
+            var line = new THREE.Line( geometry, material );     
+            line.stay = true;  
+            scene.add(line);
+        }
+
+        //GRID
+        for (var y = -100; y < 100; y++) {
+            //Y AXIS
+            var geometry = new THREE.Geometry();
+            geometry.vertices.push(new THREE.Vector3(-100,y,-0.01));
+            geometry.vertices.push(new THREE.Vector3(100,y,-0.01));
+            var material = new THREE.MeshBasicMaterial( { color: rgb(50,50,50), wireframe: 1, opacity: 0.5, transparent: true } );
+            var line = new THREE.Line( geometry, material );     
+            line.stay = true;  
+            scene.add(line);
+        }
+
+    }
+
+    
+
+
+
+
+//{x: -2, y: -14, z: 0}
+
+/*
+iot_nodesUIgroup.position.x = -2;
+iot_nodesUIgroup.position.y = -14;
+iot_nodesUIgroup.position.z = 0;
+
+iot_nodesUIgroup.rotation.x = 3.191592653589793;
+iot_nodesUIgroup.rotation.y = -0.7000000000000001;
+iot_nodesUIgroup.rotation.z = 2.291592653589792;
+
+iot_nodesUIgroup.scale.z = -1;
+*/
+
+function trilaterate_new(p1, p2, p3, return_middle)
+{
+	// based on: https://en.wikipedia.org/wiki/Trilateration
+	
+	// some additional local functions declared here for
+	// scalar and vector operations
+	
+	function sqr(a) { return a * a; }
+	
+	function norm(a) {
+		return Math.sqrt(sqr(a.x) + sqr(a.y) + sqr(a.z));
+	}
+	
+	function dot(a, b) {
+		return a.x * b.x + a.y * b.y + a.z * b.z;
+	}
+	
+	function vector_subtract(a, b) {
+		return {
+			x: a.x - b.x,
+			y: a.y - b.y,
+			z: a.z - b.z
+		};
+	}
+	
+	function vector_add(a, b) {
+		return {
+			x: a.x + b.x,
+			y: a.y + b.y,
+			z: a.z + b.z
+		};
+	}
+	
+	function vector_divide(a, b)
+	{
+		return {
+			x: a.x / b,
+			y: a.y / b,
+			z: a.z / b
+		};
+	}
+	
+	function vector_multiply(a, b)
+	{
+		return {
+			x: a.x * b,
+			y: a.y * b,
+			z: a.z * b
+		};
+	}
+	
+	function vector_cross(a, b)
+	{
+		return {
+			x: a.y * b.z - a.z * b.y,
+			y: a.z * b.x - a.x * b.z,
+			z: a.x * b.y - a.y * b.x
+		};
+	}
+	
+	var ex, ey, ez, i, j, d, a, x, y, z, b, p4;
+	
+	ex = vector_divide(vector_subtract(p2, p1), norm(vector_subtract(p2, p1)));
+	
+	i = dot(ex, vector_subtract(p3, p1));
+	a = vector_subtract(vector_subtract(p3, p1), vector_multiply(ex, i));
+	ey = vector_divide(a, norm(a));
+	ez =  vector_cross(ex, ey);
+	d = norm(vector_subtract(p2, p1));
+	j = dot(ey, vector_subtract(p3, p1));
+	
+	x = (sqr(p1.r) - sqr(p2.r) + sqr(d)) / (2 * d);
+	y = (sqr(p1.r) - sqr(p3.r) + sqr(i) + sqr(j)) / (2 * j) - (i / j) * x;
+	
+	b = sqr(p1.r) - sqr(x) - sqr(y);
+	
+	// floating point math flaw in IEEE 754 standard
+	// see https://github.com/gheja/trilateration.js/issues/2
+	if (Math.abs(b) < 0.0000000001)
+	{
+		b = 0;
+	}
+	
+	z = Math.sqrt(b);
+	
+	// no solution found
+	if (isNaN(z))
+	{
+		return null;
+	}
+	
+	a = vector_add(p1, vector_add(vector_multiply(ex, x), vector_multiply(ey, y)))
+	p4a = vector_add(a, vector_multiply(ez, z));
+	p4b = vector_subtract(a, vector_multiply(ez, z));
+	
+	if (z == 0 || return_middle)
+	{
+		return a;
+	}
+	else
+	{
+		return [ p4a, p4b ];
+	}
+}
+
+
+
+
+
+
+
+    function update() {
+        if (frame > 1) {
+            
+            //update anchor range spheres
+            for (var s in anchor_geo_spheres) {
+                anchor_geo_spheres[s].scale.x = tag.ranges[s]
+                anchor_geo_spheres[s].scale.y = tag.ranges[s]
+                anchor_geo_spheres[s].scale.z = tag.ranges[s]
+            }
+
+            var points = trilaterate_new(anchorNodes[0],anchorNodes[1],anchorNodes[2]);
+            console.log("trilat:")
+            console.log(points)
+            
+            if (points) {
+                if (points.length == 2) {
+                    console.log(points[0].x)
+                    tag_object.position.x = points[0].x
+                    tag_object.position.y = points[0].y
+                    tag_object.position.z = points[0].z
+
+                    tag_objectB.position.x = points[1].x
+                    tag_objectB.position.y = points[1].y
+                    tag_objectB.position.z = points[1].z
+
+                    //* PATH LINE DRAW *//
+                    if (lastposition) {
+                        if (lastposition.x) {
+                            //drawLine(scene, points[1], lastposition)
+                        }
+                        
+                    } else {
+
+                    }
+                    lastposition = points[1]
+                }
+                 
+                console.log("success")
+            }
+
+          
+            
+        }
+    }
+
+
+
+
+/**
+ * K-combinations
+ * 
+ * Get k-sized combinations of elements in a set.
+ * 
+ * Usage:
+ *   k_combinations(set, k)
+ * 
+ * Parameters:
+ *   set: Array of objects of any type. They are treated as unique.
+ *   k: size of combinations to search for.
+ * 
+ * Return:
+ *   Array of found combinations, size of a combination is k.
+ * 
+ * Examples:
+ * 
+ *   k_combinations([1, 2, 3], 1)
+ *   -> [[1], [2], [3]]
+ * 
+ *   k_combinations([1, 2, 3], 2)
+ *   -> [[1,2], [1,3], [2, 3]
+ * 
+ *   k_combinations([1, 2, 3], 3)
+ *   -> [[1, 2, 3]]
+ * 
+ *   k_combinations([1, 2, 3], 4)
+ *   -> []
+ * 
+ *   k_combinations([1, 2, 3], 0)
+ *   -> []
+ * 
+ *   k_combinations([1, 2, 3], -1)
+ *   -> []
+ * 
+ *   k_combinations([], 0)
+ *   -> []
+ * 
+ */
+
+
+
+
+function k_combinations(set, k) {
+	var i, j, combs, head, tailcombs;
+	
+	// There is no way to take e.g. sets of 5 elements from
+	// a set of 4.
+	if (k > set.length || k <= 0) {
+		return [];
+	}
+	
+	// K-sized set has only one K-sized subset.
+	if (k == set.length) {
+		return [set];
+	}
+	
+	// There is N 1-sized subsets in a N-sized set.
+	if (k == 1) {
+		combs = [];
+		for (i = 0; i < set.length; i++) {
+			combs.push([set[i]]);
+		}
+		return combs;
+	}
+	
+	// Assert {1 < k < set.length}
+	
+	// Algorithm description:
+	// To get k-combinations of a set, we want to join each element
+	// with all (k-1)-combinations of the other elements. The set of
+	// these k-sized sets would be the desired result. However, as we
+	// represent sets with lists, we need to take duplicates into
+	// account. To avoid producing duplicates and also unnecessary
+	// computing, we use the following approach: each element i
+	// divides the list into three: the preceding elements, the
+	// current element i, and the subsequent elements. For the first
+	// element, the list of preceding elements is empty. For element i,
+	// we compute the (k-1)-computations of the subsequent elements,
+	// join each with the element i, and store the joined to the set of
+	// computed k-combinations. We do not need to take the preceding
+	// elements into account, because they have already been the i:th
+	// element so they are already computed and stored. When the length
+	// of the subsequent list drops below (k-1), we cannot find any
+	// (k-1)-combs, hence the upper limit for the iteration:
+	combs = [];
+	for (i = 0; i < set.length - k + 1; i++) {
+		// head is a list that includes only our current element.
+		head = set.slice(i, i + 1);
+		// We take smaller combinations from the subsequent elements
+		tailcombs = k_combinations(set.slice(i + 1), k - 1);
+		// For each (k-1)-combination we join it with the current
+		// and store it to the set of k-combinations.
+		for (j = 0; j < tailcombs.length; j++) {
+			combs.push(head.concat(tailcombs[j]));
+		}
+	}
+	return combs;
+}
+
+
+/**
+ * Combinations
+ * 
+ * Get all possible combinations of elements in a set.
+ * 
+ * Usage:
+ *   combinations(set)
+ * 
+ * Examples:
+ * 
+ *   combinations([1, 2, 3])
+ *   -> [[1],[2],[3],[1,2],[1,3],[2,3],[1,2,3]]
+ * 
+ *   combinations([1])
+ *   -> [[1]]
+ */
+function combinations(set) {
+	var k, i, combs, k_combs;
+	combs = [];
+	
+	// Calculate all non-empty k-combinations
+	for (k = 1; k <= set.length; k++) {
+		k_combs = k_combinations(set, k);
+		for (i = 0; i < k_combs.length; i++) {
+			combs.push(k_combs[i]);
+		}
+	}
+	return combs;
+}
+
+
+function genColor(pos, min, max) {
+    max += 1;    
+    if (pos < min) { pos = min}
+    if (pos > max) { pos = max}
+    //generates a unique color for a sequence, given a number, min and max.
+    var wl = 380 + (pos/(max-min))*(780-380);
+    var col = wavelengthToColor(wl);
+    return col;
+}
+
+function wavelengthToColor(wavelength) {
+    //RGB 380 - 780
+//http://scienceprimer.com/javascript-code-convert-light-wavelength-color
+// takes wavelength in nm and returns an rgba value
+        var r,
+            g,
+            b,
+            alpha,
+            colorSpace,
+            wl = wavelength,
+            gamma = 1;
+ 
+ 
+        if (wl >= 380 && wl < 440) {
+            R = -1 * (wl - 440) / (440 - 380);
+            G = 0;
+            B = 1;
+       } else if (wl >= 440 && wl < 490) {
+           R = 0;
+           G = (wl - 440) / (490 - 440);
+           B = 1;  
+        } else if (wl >= 490 && wl < 510) {
+            R = 0;
+            G = 1;
+            B = -1 * (wl - 510) / (510 - 490);
+        } else if (wl >= 510 && wl < 580) {
+            R = (wl - 510) / (580 - 510);
+            G = 1;
+            B = 0;
+        } else if (wl >= 580 && wl < 645) {
+            R = 1;
+            G = -1 * (wl - 645) / (645 - 580);
+            B = 0.0;
+        } else if (wl >= 645 && wl <= 780) {
+            R = 1;
+            G = 0;
+            B = 0;
+        } else {
+            R = 0;
+            G = 0;
+            B = 0;
+        }
+ 
+        // intensty is lower at the edges of the visible spectrum.
+        if (wl > 780 || wl < 380) {
+            alpha = 0;
+        } else if (wl > 700) {
+            alpha = (780 - wl) / (780 - 700);
+        } else if (wl < 420) {
+            alpha = (wl - 380) / (420 - 380);
+        } else {
+            alpha = 1;
+        }
+ 
+        colorSpace = {
+        	r: Math.round(R*255),
+        	g: Math.round(G*255),
+        	b: Math.round(B*255),
+        	a: Math.round(alpha*255)
+        }
+        
+        if (colorSpace.r < 0) { colorSpace.r = 0}
+        if (colorSpace.g < 0) { colorSpace.g = 0}
+        if (colorSpace.b < 0) { colorSpace.b = 0}
+        if (colorSpace.a < 0) { colorSpace.a = 0}
+
+        if (colorSpace.r > 255) { colorSpace.r = 255}
+        if (colorSpace.g > 255) { colorSpace.g = 255}
+        if (colorSpace.b > 255) { colorSpace.b = 255}
+        if (colorSpace.a > 255) { colorSpace.a = 255}
+
+        // colorSpace is an array with 5 elements.
+        // The first element is the complete code as a string.  
+        // Use colorSpace[0] as is to display the desired color.  
+        // use the last four elements alone or together to access each of the individual r, g, b and a channels.  
+       
+        return colorSpace;
+       
+    }
+
+    var selectedObject;
+    var draggingobject = false;
+    var selectedObjects = []
+
+    var offset = new THREE.Vector3();
+
+    var raycaster = new THREE.Raycaster();
+		mouse = new THREE.Vector2();
+
+function onDocumentMouseDown( event ) {
+    event.preventDefault();
+
+    console.log(event);
+        
+        //LEFT CLICK
+        if (event.button == 0) {
+
+            var elementId = (event.target || event.srcElement).id;
+
+            console.log(elementId)
+            //console.log(event.path[0])
+            
+            if (event.path[0].tagName == "CANVAS") {
+                rightClickMenuHide();
+            }
+        }
+
+
+        
+        mouse.x = ( event.clientX / renderer.domElement.clientWidth ) * 2 - 1;
+        mouse.y = - ( event.clientY / renderer.domElement.clientHeight ) * 2 + 1;
+        var vector = new THREE.Vector3(mouse.x, mouse.y, 1);
+        vector.unproject(camera);
+        raycaster.setFromCamera( mouse, camera );
+        var intersects = raycaster.intersectObjects( clickableObjects );
+        console.log(intersects);
+        if ( intersects.length > 0 ) {
+            
+            draggingobject = true;
+            controls.enabled = false; //click and drag on an object, so disable camera move
+            selectedObject = intersects[0];
+            // Calculate the offset
+            var intersectPlane = raycaster.intersectObject(plane);
+            offset.copy(intersectPlane[0].point).sub(plane.position);
+            //right click menu
+            
+        } else {
+
+            
+        }
+    
+
+        if (event.button == 2) { 
+            if (selectedObject) {
+                selectedObject.event = event;
+                rightClickMenu(selectedObject)
+            } else {
+                rightClickMenuHide();
+            }
+             
+        }
+
+}
+
+var rightClickMenuContext = {}
+
+function positionLockToggleGeometry(object, state) {
+    if (object.positionLock) {
+        object.geometry = new THREE.OctahedronGeometry( 2/10, 0);
+    }
+    else { 
+        object.geometry = new THREE.CubeGeometry( 1/10, 1/10, 1/10);
+    }
+
+}
+
+function rightClickMenuHide() {
+    $("#rightClickMenu").hide();
+}
+
+function rightClickMenu(selected) {
+        rightClickMenuContext.selected = selected;
+        console.log("right click menu")
+
+        console.log(selected)
+        if (selected) {
+            var roundedPosition = {
+                x: selected.object.position.x.toFixed(4),
+                y: selected.object.position.y.toFixed(4),
+                z: selected.object.position.z.toFixed(4)
+            }
+            
+            var rightmenuhtml = ""
+
+            rightmenuhtml += '<div class="rightClickMenuItem">NAME: '+selected.object.name+'</div>';
+            rightmenuhtml += '<div class="rightClickMenuItem">DEVICEID: '+selected.object.deviceID+'</div>';
+            rightmenuhtml += '<div class="rightClickMenuItem">POSITION:<br>'+JSON.stringify(roundedPosition).replaceAll('"','').replaceAll('{','').replaceAll('}','')+'</div>';
+            rightmenuhtml += '<div id="setPositionLock" class="rightClickMenuItem">positionLock: '+selected.object.positionLock+'</div>';
+            rightmenuhtml += '<div id="calcPosition" class="rightClickMenuItem">Calculate position</div>';
+
+            $("#rightClickMenu").html(rightmenuhtml)
+            $("#rightClickMenu").css("top", selected.event.clientY);
+            $("#rightClickMenu").css("left", selected.event.clientX);
+
+            $("#setPositionLock").click(function() {
+                console.log("click positionlock")
+                console.log(rightClickMenuContext);
+                var thisnode = getNode(selected.object.deviceID)
+                if (rightClickMenuContext.selected.object.positionLock) {
+                    thisnode.positionLock = false;
+                    rightClickMenuContext.selected.object.positionLock = false;
+                    positionLockToggleGeometry(rightClickMenuContext.selected.object, false);
+                } else {
+                    rightClickMenuContext.selected.object.positionLock = true;
+                    thisnode.positionLock = true;
+                    positionLockToggleGeometry(rightClickMenuContext.selected.object, true);
+                }
+                console.log(mesh.nodes);
+                lastMeshUpdate = 0;
+                updateServerMesh(); //reemit because positionLock changed.
+                rightClickMenu(rightClickMenuContext.selected); //redraw
+            })
+
+            $("#calcPosition").click( function() {
+                var thisnode = getNode(selected.object.deviceID)
+                console.log("Calc Position deviceID "+thisnode.deviceID)
+                //calcPosition(thisnode.deviceID);
+            })
+
+
+            $("#rightClickMenu").show();
+        } else {
+            $("#rightClickMenu").hide();
+        }
+
+
+}
+
+//////////////////////
+
+function onDocumentMouseUp( event ) { 
+    //reenable camera
+    controls.enabled = true;
+    draggingobject = false; //no longer dragging object.
+    selectedObject = null;
+
+    if (waitingUpdate == true) {
+        lastMeshUpdate = 0;
+        updateServerMesh(); //reemit because positionLock changed.
+    }
+}
+
+//////////////////////
+
+function onDocumentMouseMove( event ) { 
+    event.preventDefault();
+    var mouseX = (event.clientX / window.innerWidth) * 2 - 1;
+    var mouseY = -(event.clientY / window.innerHeight) * 2 + 1;
+    var vector = new THREE.Vector3(mouseX, mouseY, 1);
+    vector.unproject(camera);
+    raycaster.set( camera.position, vector.sub( camera.position ).normalize() );
+
+    //move while selected (clicked) = drag move.
+    if (selectedObject) {
+        var intersects = raycaster.intersectObject(plane);
+        // Reposition the object based on the intersection point with the plane
+        
+        //selectedObject.object.position.copy(intersects[0].point.sub(offset));
+        var targetLocation = intersects[0].point.sub(offset)
+
+        var thisnode = getNode(selectedObject.object.deviceID);
+
+        //thisnode.positionLock = true
+        thisnode.x = targetLocation.x
+        thisnode.y = targetLocation.y
+        thisnode.z = targetLocation.z
+
+        //thisnode.x = targetLocation.x
+        //thisnode.y = targetLocation.y
+        //thisnode.z = targetLocation.z
+        //updateNode(thisnode);
+
+        iotnxt_ui_calcLocations(selectedObject.object.deviceID);
+        updateServerMesh() //send to server.
+    } else {
+        // Update position of the plane if need
+        var intersects = raycaster.intersectObjects(clickableObjects);
+
+        if (intersects.length > 0) {
+
+            //hover
+            var mustgenhovermesh = false;
+            if (hoverMesh.length > 0) {
+                if (hoverMesh[0].deviceID == intersects[0].object.deviceID) {
+                    //already generated.. chill
+                } else {
+                    mustgenhovermesh = true;
+                }
+            } else {
+                mustgenhovermesh = true;
+            }
+            if (mustgenhovermesh == true) {
+                var outlineMaterial1 = new THREE.MeshBasicMaterial( { color: 0xffffff, side: THREE.BackSide } );
+                var outlineMesh1 = new THREE.Mesh( intersects[ 0 ].object.geometry, outlineMaterial1 );
+                outlineMesh1.position.copy(intersects[ 0 ].object.position);
+                outlineMesh1.scale.multiplyScalar(1.05);
+                outlineMesh1.deviceID = intersects[0].object.deviceID;
+                outlineMesh1.stay = true;
+                scene.add( outlineMesh1 );
+                hoverMesh[0] = outlineMesh1;
+            }
+
+
+            //intersects[ 0 ].object.material.color.setHex( Math.random() * 0xffffff );
+
+            plane.position.copy(intersects[0].object.position);
+            plane.lookAt(camera.position);
+
+            var roundedPosition = {
+                x: intersects[0].object.position.x.toFixed(4),
+                y: intersects[0].object.position.y.toFixed(4),
+                z: intersects[0].object.position.z.toFixed(4)
+            }
+            setUIStatus("DeviceID: "+ intersects[0].object.deviceID + " Pos: " + JSON.stringify(roundedPosition).replaceAll('"','').replaceAll('{','').replaceAll('}','') )
+        } else {
+            //mouseover empy space
+            for (var m in hoverMesh) { hoverMesh[m].stay = false;}
+        }
+
+    }
+    
+}
+
+var hoverMesh = [];
+
+function setUIStatus(text) {
+    $("#status").html(text);
+}
+
+var waitingUpdate = false;
+
+function updateServerMesh() {
+    if (Date.now() - lastMeshUpdate < 200) {
+        waitingUpdate = true;
+    } else {
+        socket.emit("mesh", mesh);
+        lastMeshUpdate = Date.now();
+    }
+    
+    
+}
+
+
+</script>
+</body>
+</html>

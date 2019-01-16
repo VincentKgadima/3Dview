@@ -1,0 +1,24 @@
+{
+  "name": "nodejs_server",
+  "version": "1.0.0",
+  "description": "Node Server for 3D viewing",
+  "main": "server_mesh.js",
+  "dependencies": {
+    "serialport": "^7.1.0",
+    "signalr-client": "^0.0.19"
+  },
+  "devDependencies": {},
+  "scripts": {
+    "test": "npm run test"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/VincentKgadima/3Dview.git"
+  },
+  "author": "Vincent Kgadima",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/VincentKgadima/3Dview/issues"
+  },
+  "homepage": "https://github.com/VincentKgadima/3Dview#readme"
+}
