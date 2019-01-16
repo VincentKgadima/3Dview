@@ -4,8 +4,13 @@
   "description": "Node Server for 3D viewing",
   "main": "server_mesh.js",
   "dependencies": {
+    "bson": "1.0.5",
+    "debug": "2.6.9",
+    "express": "^4.16.4",
+    "mongojs": "^2.6.0",
     "serialport": "^7.1.0",
-    "signalr-client": "^0.0.19"
+    "signalr-client": "^0.0.19",
+    "socket.io": "^2.2.0"
   },
   "devDependencies": {},
   "scripts": {
